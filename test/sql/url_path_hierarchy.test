@@ -1,0 +1,50 @@
+# name: test/sql/url_path_hierarchy.test
+# description: test netquack URLPathHierarchy function
+# group: [netquack]
+
+require netquack
+
+statement ok
+CREATE TABLE uri_list AS SELECT * FROM read_csv('test/data/examples.csv', header=false, columns={'uri': 'VARCHAR'});
+
+# basic example from docs
+query I
+SELECT url_path_hierarchy('https://example.com/browse/CONV-6788');
+----
+[/browse/, /browse/conv-6788]
+
+# trailing slash preserves trailing slash on last element
+query I
+SELECT url_path_hierarchy('https://example.com/a/b/c/');
+----
+[/a/, /a/b/, /a/b/c/]
+
+# root-only path returns empty list
+query I
+SELECT url_path_hierarchy('https://example.com/');
+----
+[]
+
+# host without explicit scheme
+query I
+SELECT url_path_hierarchy('example.com/a/b');
+----
+[/a/, /a/b]
+
+# apply to a table of URIs
+query I
+SELECT url_path_hierarchy(uri) FROM uri_list;
+----
+[]
+[]
+[]
+[]
+[]
+[/a]
+[/a]
+[]
+[]
+[]
+[/path/]
+
+

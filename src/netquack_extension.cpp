@@ -21,6 +21,7 @@
 #include "functions/get_tranco.hpp"
 #include "functions/get_version.hpp"
 #include "functions/ipcalc.hpp"
+#include "functions/url_path_hierarchy.hpp"
 #include "utils/utils.hpp"
 
 namespace duckdb
@@ -99,6 +100,15 @@ namespace duckdb
             LogicalType::VARCHAR,
             ExtractExtensionFunction);
         loader.RegisterFunction (netquack_extract_extension_function);
+
+        // URLPathHierarchy(url) -> LIST(VARCHAR)
+        auto url_path_hierarchy_type = LogicalType::LIST (LogicalType::VARCHAR);
+        auto url_path_hierarchy_function_alias = ScalarFunction (
+            "url_path_hierarchy",
+            { LogicalType::VARCHAR },
+            url_path_hierarchy_type,
+            URLPathHierarchyFunction);
+        loader.RegisterFunction (url_path_hierarchy_function_alias);
 
         auto netquack_update_tranco_function = ScalarFunction (
             "update_tranco",
