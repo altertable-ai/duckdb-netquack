@@ -91,6 +91,7 @@ namespace duckdb
                 }
 
                 curl_easy_setopt (curl, CURLOPT_URL, download_url.c_str ());
+                curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, NULL); // Use default file write callback
                 curl_easy_setopt (curl, CURLOPT_WRITEDATA, file);
                 res = curl_easy_perform (curl);
                 curl_easy_cleanup (curl);
