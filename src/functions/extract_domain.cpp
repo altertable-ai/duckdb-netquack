@@ -2,14 +2,17 @@
 
 #include "extract_domain.hpp"
 
+#include "duckdb/common/vector/flat_vector.hpp"
+#include "duckdb/common/vector/string_vector.hpp"
+
 #include "../utils/tld_lookup.hpp"
 #include "../utils/url_helpers.hpp"
 
 namespace duckdb {
 void ExtractDomainFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	const auto &input_vector = args.data[0];
-	auto result_data = FlatVector::GetData<string_t>(result);
-	auto &result_validity = FlatVector::Validity(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
 	for (idx_t i = 0; i < args.size(); i++) {
 		auto value = input_vector.GetValue(i);

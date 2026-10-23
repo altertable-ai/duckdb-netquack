@@ -8,8 +8,8 @@
 namespace duckdb {
 void ExtractSubDomainFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	const auto &input_vector = args.data[0];
-	auto result_data = FlatVector::GetData<string_t>(result);
-	auto &result_validity = FlatVector::Validity(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
 	for (idx_t i = 0; i < args.size(); i++) {
 		auto value = input_vector.GetValue(i);
@@ -61,16 +61,12 @@ std::string ExtractSubDomain(const std::string_view &input) {
 	// Get the effective TLD
 	std::string tld = getEffectiveTLD(host_str);
 	if (tld.empty()) {
-		{
-			return "";
-		} // No TLD found
+		{ return ""; } // No TLD found
 	}
 
 	// If the host is just the TLD, no subdomain
 	if (host_str == tld) {
-		{
-			return "";
-		}
+		{ return ""; }
 	}
 
 	// Find where the TLD starts in the hostname
@@ -85,16 +81,12 @@ std::string ExtractSubDomain(const std::string_view &input) {
 				return host_str.substr(0, domain_start);
 			} else {
 				// No subdomain, just domain.tld
-				{
-					return "";
-				}
+				{ return ""; }
 			}
 		}
 	}
 
-	{
-		return "";
-	}
+	{ return ""; }
 }
 } // namespace netquack
 } // namespace duckdb

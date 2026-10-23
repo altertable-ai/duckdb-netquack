@@ -12,8 +12,8 @@ namespace duckdb {
 template <bool (*Predicate)(const std::string_view &)>
 static void BooleanDomainFunction(DataChunk &args, Vector &result) {
 	const auto &input_vector = args.data[0];
-	auto result_data = FlatVector::GetData<bool>(result);
-	auto &result_validity = FlatVector::Validity(result);
+	auto result_data = FlatVector::GetDataMutable<bool>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
 	for (idx_t i = 0; i < args.size(); i++) {
 		auto value = input_vector.GetValue(i);

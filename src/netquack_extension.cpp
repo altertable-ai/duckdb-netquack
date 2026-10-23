@@ -51,9 +51,22 @@ FunctionDescription MakeDescription(vector<LogicalType> parameter_types, vector<
 	return desc;
 }
 
+// duckdb_functions() reads parameter names from the signature, so name the parameters there
+static vector<LogicalType> NameParameters(FunctionSignature &signature, const vector<string> &parameter_names) {
+	vector<LogicalType> types;
+	for (idx_t i = 0; i < signature.GetParameterCount(); i++) {
+		auto &parameter = signature.GetParameter(i);
+		if (i < parameter_names.size()) {
+			parameter.SetName(Identifier(parameter_names[i]));
+		}
+		types.push_back(parameter.GetType());
+	}
+	return types;
+}
+
 void Register(ExtensionLoader &loader, ScalarFunction function, vector<string> parameter_names, string description,
               vector<string> examples, vector<string> categories) {
-	auto types = function.arguments;
+	auto types = NameParameters(function.GetSignature(), parameter_names);
 	CreateScalarFunctionInfo info(std::move(function));
 	info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
 	info.descriptions.push_back(MakeDescription(std::move(types), std::move(parameter_names), std::move(description),
@@ -63,7 +76,7 @@ void Register(ExtensionLoader &loader, ScalarFunction function, vector<string> p
 
 void Register(ExtensionLoader &loader, TableFunction function, vector<string> parameter_names, string description,
               vector<string> examples, vector<string> categories) {
-	auto types = function.arguments;
+	auto types = NameParameters(function.GetSignature(), parameter_names);
 	CreateTableFunctionInfo info(std::move(function));
 	info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
 	info.descriptions.push_back(MakeDescription(std::move(types), std::move(parameter_names), std::move(description),

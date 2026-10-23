@@ -8,8 +8,8 @@ namespace duckdb {
 
 void DefangFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	const auto &input_vector = args.data[0];
-	auto result_data = FlatVector::GetData<string_t>(result);
-	auto &result_validity = FlatVector::Validity(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
 	for (idx_t i = 0; i < args.size(); i++) {
 		auto value = input_vector.GetValue(i);
@@ -26,8 +26,8 @@ void DefangFunction(DataChunk &args, ExpressionState &, Vector &result) {
 
 void RefangFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	const auto &input_vector = args.data[0];
-	auto result_data = FlatVector::GetData<string_t>(result);
-	auto &result_validity = FlatVector::Validity(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
 	for (idx_t i = 0; i < args.size(); i++) {
 		auto value = input_vector.GetValue(i);
@@ -209,8 +209,7 @@ std::string Refang(const std::string_view &input) {
 		std::string_view inner;
 		std::string_view replacement;
 	};
-	static constexpr Token TOKENS[] = {{"://", "://"}, {".", "."}, {"dot", "."}, {":", ":"},
-	                                   {"@", "@"},     {"at", "@"}};
+	static constexpr Token TOKENS[] = {{"://", "://"}, {".", "."}, {"dot", "."}, {":", ":"}, {"@", "@"}, {"at", "@"}};
 
 	// Pass 1: unwrap bracketed separators like [.], (dot), {:}, [://], [@]
 	std::string unwrapped;

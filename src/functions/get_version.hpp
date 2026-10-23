@@ -7,7 +7,7 @@
 namespace duckdb::netquack {
 struct VersionFunc {
 	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,
-	                                     vector<LogicalType> &return_types, vector<string> &names);
+	                                     vector<LogicalType> &return_types, vector<Identifier> &names);
 	static void Scan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &context, TableFunctionInitInput &input,
 	                                                     GlobalTableFunctionState *global_state_p);

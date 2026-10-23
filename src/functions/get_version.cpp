@@ -8,7 +8,7 @@ struct VersionLocalState : public LocalTableFunctionState {
 };
 
 unique_ptr<FunctionData> VersionFunc::Bind(ClientContext &, TableFunctionBindInput &, vector<LogicalType> &return_types,
-                                           vector<string> &names) {
+                                           vector<Identifier> &names) {
 	// 0. version: version of the extension.
 	return_types.emplace_back(LogicalTypeId::VARCHAR);
 	names.emplace_back("version");

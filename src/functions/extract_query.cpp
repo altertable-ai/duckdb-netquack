@@ -10,8 +10,8 @@
 namespace duckdb {
 void ExtractQueryStringFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	const auto &input_vector = args.data[0];
-	auto result_data = FlatVector::GetData<string_t>(result);
-	auto &result_validity = FlatVector::Validity(result);
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
 	for (idx_t i = 0; i < args.size(); i++) {
 		auto value = input_vector.GetValue(i);
@@ -128,7 +128,8 @@ struct ExtractQueryParametersLocalState : public LocalTableFunctionState {
 };
 
 unique_ptr<FunctionData> ExtractQueryParametersFunc::Bind(ClientContext &, TableFunctionBindInput &,
-                                                          vector<LogicalType> &return_types, vector<string> &names) {
+                                                          vector<LogicalType> &return_types,
+                                                          vector<Identifier> &names) {
 	// Define output columns: key and value
 	return_types.emplace_back(LogicalTypeId::VARCHAR);
 	names.emplace_back("key");
