@@ -1,0 +1,91 @@
+// Auto-generated from Mozilla Public Suffix List using gperf
+
+#include "tld_lookup.hpp"
+
+#include "tld_lookup_generated.hpp"
+
+namespace duckdb::netquack {
+static bool hasRule(const std::string &rule) {
+	return TLDLookupHash::isValidTLD(rule.c_str(), static_cast<unsigned int>(rule.length())) != nullptr;
+}
+
+bool isValidTLD(const char *str, size_t len) {
+	// Wildcard and exception rules are stored verbatim and must not match plain hostnames
+	if (len == 0 || str[0] == '*' || str[0] == '!') {
+		return false;
+	}
+	return TLDLookupHash::isValidTLD(str, static_cast<unsigned int>(len)) != nullptr;
+}
+
+bool isPublicSuffix(const std::string &name) {
+	if (name.empty() || name.find_first_of("*!") != std::string::npos) {
+		return false;
+	}
+	if (hasRule("!" + name)) {
+		return false;
+	}
+	if (hasRule(name)) {
+		return true;
+	}
+	size_t dot = name.find('.');
+	if (dot == std::string::npos) {
+		// A TLD listed only via a wildcard rule (*.ck) is still a suffix
+		return isKnownTLD(name);
+	}
+	return dot > 0 && hasRule("*" + name.substr(dot));
+}
+
+bool isKnownTLD(const std::string &label) {
+	if (label.empty() || label.find_first_of(".*!") != std::string::npos) {
+		return false;
+	}
+	return hasRule(label) || hasRule("*." + label);
+}
+
+bool isValidTLD(const std::string &suffix) {
+	return isValidTLD(suffix.c_str(), suffix.length());
+}
+
+std::string getEffectiveTLD(const std::string &hostname) {
+	if (hostname.empty()) {
+		return "";
+	}
+
+	// Implement proper public suffix algorithm:
+	// Find the longest matching public suffix
+
+	// First check if the entire hostname is a TLD
+	if (isValidTLD(hostname)) {
+		return hostname;
+	}
+
+	// Try all possible suffixes and find the longest match
+	std::string longest_tld;
+
+	for (size_t pos = 0; pos < hostname.length(); ++pos) {
+		if (hostname[pos] == '.') {
+			std::string candidate = hostname.substr(pos + 1);
+			if (isValidTLD(candidate)) {
+				// Keep the longest match
+				if (candidate.length() > longest_tld.length()) {
+					longest_tld = candidate;
+				}
+			}
+		}
+	}
+
+	// If we found a valid TLD, return it
+	if (!longest_tld.empty()) {
+		return longest_tld;
+	}
+
+	// If no valid TLD found, return the last part after the last dot
+	size_t last_dot = hostname.find_last_of('.');
+	if (last_dot != std::string::npos) {
+		return hostname.substr(last_dot + 1);
+	}
+
+	// No dots, return entire hostname
+	return hostname;
+}
+} // namespace duckdb::netquack

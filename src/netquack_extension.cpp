@@ -4,166 +4,369 @@
 
 #include "netquack_extension.hpp"
 
-#include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/parser/parsed_data/create_function_info.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include "functions/base64_functions.hpp"
+#include "functions/defang_functions.hpp"
 #include "functions/extract_domain.hpp"
+#include "functions/domain_depth.hpp"
 #include "functions/extract_extension.hpp"
+#include "functions/extract_fragment.hpp"
 #include "functions/extract_host.hpp"
 #include "functions/extract_path.hpp"
+#include "functions/extract_path_segments.hpp"
+#include "functions/url_encode_functions.hpp"
 #include "functions/extract_port.hpp"
 #include "functions/extract_query.hpp"
 #include "functions/extract_schema.hpp"
+#include "functions/extract_sld.hpp"
 #include "functions/extract_subdomain.hpp"
 #include "functions/extract_tld.hpp"
 #include "functions/get_tranco.hpp"
 #include "functions/get_version.hpp"
+#include "functions/indicator_functions.hpp"
+#include "functions/ip_functions.hpp"
 #include "functions/ipcalc.hpp"
-#include "utils/utils.hpp"
+#include "functions/normalize_url.hpp"
+#include "functions/parse_uri.hpp"
+#include "functions/public_suffix_functions.hpp"
+#include "functions/surt_functions.hpp"
+#include "functions/validation_functions.hpp"
 
-namespace duckdb
-{
-    // Load the extension into the database
-    static void LoadInternal (ExtensionLoader &loader)
-    {
-        loader.SetDescription("Parsing, extracting, and analyzing domains, URIs, and paths with ease.");
-        
-        auto netquack_extract_domain_function = ScalarFunction (
-            "extract_domain",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractDomainFunction);
-        loader.RegisterFunction (netquack_extract_domain_function);
+namespace duckdb {
 
-        auto netquack_update_suffixes_function = ScalarFunction (
-            "update_suffixes",
-            {},
-            LogicalType::VARCHAR,
-            netquack::UpdateSuffixesFunction);
-        loader.RegisterFunction (netquack_update_suffixes_function);
+namespace {
 
-        auto netquack_extract_path_function = ScalarFunction (
-            "extract_path",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractPathFunction);
-        loader.RegisterFunction (netquack_extract_path_function);
+FunctionDescription MakeDescription(vector<LogicalType> parameter_types, vector<string> parameter_names,
+                                    string description, vector<string> examples, vector<string> categories) {
+	FunctionDescription desc;
+	desc.parameter_types = std::move(parameter_types);
+	desc.parameter_names = std::move(parameter_names);
+	desc.description = std::move(description);
+	desc.examples = std::move(examples);
+	desc.categories = std::move(categories);
+	return desc;
+}
 
-        auto netquack_extract_schema_function = ScalarFunction (
-            "extract_schema",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractSchemaFunction);
-        loader.RegisterFunction (netquack_extract_schema_function);
+// duckdb_functions() reads parameter names from the signature, so name the parameters there
+static vector<LogicalType> NameParameters(FunctionSignature &signature, const vector<string> &parameter_names) {
+	vector<LogicalType> types;
+	for (idx_t i = 0; i < signature.GetParameterCount(); i++) {
+		auto &parameter = signature.GetParameter(i);
+		if (i < parameter_names.size()) {
+			parameter.SetName(Identifier(parameter_names[i]));
+		}
+		types.push_back(parameter.GetType());
+	}
+	return types;
+}
 
-        auto netquack_extract_host_function = ScalarFunction (
-            "extract_host",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractHostFunction);
-        loader.RegisterFunction (netquack_extract_host_function);
+void Register(ExtensionLoader &loader, ScalarFunction function, vector<string> parameter_names, string description,
+              vector<string> examples, vector<string> categories) {
+	auto types = NameParameters(function.GetSignature(), parameter_names);
+	CreateScalarFunctionInfo info(std::move(function));
+	info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+	info.descriptions.push_back(MakeDescription(std::move(types), std::move(parameter_names), std::move(description),
+	                                            std::move(examples), std::move(categories)));
+	loader.RegisterFunction(std::move(info));
+}
 
-        auto netquack_extract_query_string_function = ScalarFunction (
-            "extract_query_string",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractQueryStringFunction);
-        loader.RegisterFunction (netquack_extract_query_string_function);
+void Register(ExtensionLoader &loader, TableFunction function, vector<string> parameter_names, string description,
+              vector<string> examples, vector<string> categories) {
+	auto types = NameParameters(function.GetSignature(), parameter_names);
+	CreateTableFunctionInfo info(std::move(function));
+	info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+	info.descriptions.push_back(MakeDescription(std::move(types), std::move(parameter_names), std::move(description),
+	                                            std::move(examples), std::move(categories)));
+	loader.RegisterFunction(std::move(info));
+}
 
-        auto netquack_extract_tld_function = ScalarFunction (
-            "extract_tld",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractTLDFunction);
-        loader.RegisterFunction (netquack_extract_tld_function);
+} // namespace
 
-        auto netquack_extract_subdomain_function = ScalarFunction (
-            "extract_subdomain",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractSubDomainFunction);
-        loader.RegisterFunction (netquack_extract_subdomain_function);
+// Load the extension into the database
+static void LoadInternal(ExtensionLoader &loader) {
+	loader.SetDescription("Parsing, extracting, and analyzing domains, URIs, and paths with ease.");
 
-        auto netquack_extract_port_function = ScalarFunction (
-            "extract_port",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractPortFunction);
-        loader.RegisterFunction (netquack_extract_port_function);
+	Register(loader,
+	         ScalarFunction("extract_domain", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractDomainFunction),
+	         {"url"}, "Extracts the registrable domain from a URL using the Public Suffix List.",
+	         {"SELECT extract_domain('https://b.a.example.com/path');"}, {"url"});
 
-        auto netquack_extract_extension_function = ScalarFunction (
-            "extract_extension",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            ExtractExtensionFunction);
-        loader.RegisterFunction (netquack_extract_extension_function);
+	Register(loader, ScalarFunction("extract_path", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractPathFunction),
+	         {"url"}, "Extracts the path component from a URL.",
+	         {"SELECT extract_path('https://example.com/path/to/page');"}, {"url"});
 
-        auto netquack_update_tranco_function = ScalarFunction (
-            "update_tranco",
-            { LogicalType::BOOLEAN },
-            LogicalType::VARCHAR,
-            netquack::UpdateTrancoListFunction);
-        loader.RegisterFunction (netquack_update_tranco_function);
+	Register(loader,
+	         ScalarFunction("extract_schema", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractSchemaFunction),
+	         {"url"}, "Extracts the scheme (protocol) from a URL.",
+	         {"SELECT extract_schema('https://example.com/path');"}, {"url"});
 
-        auto get_tranco_rank_function = ScalarFunction (
-            "get_tranco_rank",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            netquack::GetTrancoRankFunction);
-                    loader.RegisterFunction (get_tranco_rank_function);
+	Register(loader, ScalarFunction("extract_host", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractHostFunction),
+	         {"url"}, "Extracts the host from a URL, excluding the port.",
+	         {"SELECT extract_host('https://b.a.example.com/path');"}, {"url"});
 
-        auto get_tranco_rank_category_function = ScalarFunction (
-            "get_tranco_rank_category",
-            { LogicalType::VARCHAR },
-            LogicalType::VARCHAR,
-            netquack::GetTrancoRankCategoryFunction);
-        loader.RegisterFunction (get_tranco_rank_category_function);
+	Register(loader,
+	         ScalarFunction("extract_query_string", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                        ExtractQueryStringFunction),
+	         {"url"}, "Extracts the raw query string from a URL.",
+	         {"SELECT extract_query_string('https://example.com/search?q=duckdb&hl=en');"}, {"url"});
 
-        auto ipcalc_function = TableFunction (
-            "ipcalc",
-            { LogicalType::VARCHAR },
-            nullptr,
-            netquack::IPCalcFunc::Bind,
-            nullptr,
-            netquack::IPCalcFunc::InitLocal);
-        ipcalc_function.in_out_function = netquack::IPCalcFunc::Function;
-        loader.RegisterFunction (ipcalc_function);
+	auto extract_query_parameters_function = TableFunction("extract_query_parameters", {LogicalType::VARCHAR}, nullptr,
+	                                                       netquack::ExtractQueryParametersFunc::Bind, nullptr,
+	                                                       netquack::ExtractQueryParametersFunc::InitLocal);
+	extract_query_parameters_function.in_out_function = netquack::ExtractQueryParametersFunc::Function;
+	Register(loader, std::move(extract_query_parameters_function), {"url"},
+	         "Expands a URL query string into one row per key-value pair.",
+	         {"SELECT * FROM extract_query_parameters('https://example.com/search?q=duckdb&hl=en');"}, {"url"});
 
-        auto version_function = TableFunction (
-            "netquack_version",
-            {},
-            netquack::VersionFunc::Scan,
-            netquack::VersionFunc::Bind,
-            netquack::VersionFunc::InitGlobal,
-            netquack::VersionFunc::InitLocal);
-        loader.RegisterFunction (version_function);
-    }
+	Register(loader, ScalarFunction("extract_tld", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractTLDFunction),
+	         {"url"}, "Extracts the public suffix (TLD) from a URL, including multi-part suffixes.",
+	         {"SELECT extract_tld('https://example.com.au/path');"}, {"url"});
 
-    void NetquackExtension::Load (ExtensionLoader &loader)
-    {
-        LoadInternal (loader);
-    }
-    std::string NetquackExtension::Name ()
-    {
-        return "netquack";
-    }
+	Register(
+	    loader,
+	    ScalarFunction("extract_subdomain", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractSubDomainFunction),
+	    {"url"}, "Extracts the subdomain labels that precede the registrable domain.",
+	    {"SELECT extract_subdomain('http://a.b.example.com/path');"}, {"url"});
 
-    std::string NetquackExtension::Version () const
-    {
+	Register(loader, ScalarFunction("extract_sld", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractSLDFunction),
+	         {"url"}, "Extracts the label just before the public suffix (second-level domain) from a URL.",
+	         {"SELECT extract_sld('https://mail.google.co.uk/inbox');"}, {"url"});
+
+	Register(loader, ScalarFunction("extract_port", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractPortFunction),
+	         {"url"}, "Extracts the port from a URL.", {"SELECT extract_port('https://example.com:8443/');"}, {"url"});
+
+	Register(
+	    loader,
+	    ScalarFunction("extract_extension", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractExtensionFunction),
+	    {"url"}, "Extracts the file extension from a URL path, without the leading dot.",
+	    {"SELECT extract_extension('http://example.com/image.jpg');"}, {"url"});
+
+	Register(loader,
+	         ScalarFunction("update_tranco", {LogicalType::BOOLEAN}, LogicalType::VARCHAR,
+	                        netquack::UpdateTrancoListFunction),
+	         {"force"}, "Downloads or refreshes the local Tranco top-sites list. Pass true to force a re-download.",
+	         {"SELECT update_tranco(false);"}, {"tranco"});
+
+	Register(loader,
+	         ScalarFunction("get_tranco_rank", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                        netquack::GetTrancoRankFunction),
+	         {"domain"}, "Returns the Tranco rank of a domain.", {"SELECT get_tranco_rank('microsoft.com');"},
+	         {"tranco"});
+
+	Register(loader,
+	         ScalarFunction("get_tranco_rank_category", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                        netquack::GetTrancoRankCategoryFunction),
+	         {"domain"}, "Returns the log-scale Tranco rank category of a domain (e.g. top1k, top10k).",
+	         {"SELECT get_tranco_rank_category('microsoft.com');"}, {"tranco"});
+
+	TableFunction tranco_list_function("tranco_list", {}, nullptr);
+	tranco_list_function.bind_replace = netquack::TrancoListFunc::BindReplace;
+	Register(loader, std::move(tranco_list_function), {},
+	         "Returns the cached Tranco list as rows of rank, domain, and category for joins.",
+	         {"SELECT * FROM tranco_list() LIMIT 10;"}, {"tranco"});
+
+	auto ipcalc_function = TableFunction("ipcalc", {LogicalType::VARCHAR}, nullptr, netquack::IPCalcFunc::Bind, nullptr,
+	                                     netquack::IPCalcFunc::InitLocal);
+	ipcalc_function.in_out_function = netquack::IPCalcFunc::Function;
+	Register(loader, std::move(ipcalc_function), {"cidr"},
+	         "Calculates network, broadcast, netmask, and host range for an IPv4 CIDR address.",
+	         {"SELECT * FROM ipcalc('192.168.1.0/24');"}, {"ip"});
+
+	Register(loader, ScalarFunction("is_valid_ip", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsValidIPFunction),
+	         {"ip"}, "Returns true if the input is a valid IPv4 or IPv6 address.",
+	         {"SELECT is_valid_ip('192.168.1.1');"}, {"ip"});
+
+	Register(loader, ScalarFunction("is_private_ip", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsPrivateIPFunction),
+	         {"ip"}, "Returns true if the IP belongs to a private or reserved range.",
+	         {"SELECT is_private_ip('192.168.1.1');"}, {"ip"});
+
+	Register(loader, ScalarFunction("ip_to_int", {LogicalType::VARCHAR}, LogicalType::UBIGINT, IPToIntFunction), {"ip"},
+	         "Converts an IPv4 address to its 32-bit unsigned integer representation.",
+	         {"SELECT ip_to_int('192.168.1.1');"}, {"ip"});
+
+	Register(loader, ScalarFunction("int_to_ip", {LogicalType::UBIGINT}, LogicalType::VARCHAR, IntToIPFunction),
+	         {"ip_int"}, "Converts a 32-bit unsigned integer back to an IPv4 address.",
+	         {"SELECT int_to_ip(3232235777::UBIGINT);"}, {"ip"});
+
+	Register(loader, ScalarFunction("ip_version", {LogicalType::VARCHAR}, LogicalType::TINYINT, IPVersionFunction),
+	         {"ip"}, "Returns 4 for IPv4, 6 for IPv6, or NULL for invalid input.",
+	         {"SELECT ip_version('192.168.1.1');"}, {"ip"});
+
+	Register(loader,
+	         ScalarFunction("ip_in_range", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
+	                        IPInRangeFunction),
+	         {"ip", "cidr"}, "Returns true if the IP address falls within the given IPv4 or IPv6 CIDR block.",
+	         {"SELECT ip_in_range('192.168.1.100', '192.168.1.0/24');"}, {"ip"});
+
+	Register(loader, ScalarFunction("ip_to_ptr", {LogicalType::VARCHAR}, LogicalType::VARCHAR, IPToPTRFunction), {"ip"},
+	         "Builds the reverse DNS (in-addr.arpa / ip6.arpa) name for an IPv4 or IPv6 address.",
+	         {"SELECT ip_to_ptr('192.168.1.1');"}, {"ip"});
+
+	Register(loader,
+	         ScalarFunction("ipv6_compress", {LogicalType::VARCHAR}, LogicalType::VARCHAR, IPv6CompressFunction),
+	         {"ip"}, "Formats an IPv6 address in its shortest RFC 5952 canonical form.",
+	         {"SELECT ipv6_compress('2001:0db8:0000:0000:0000:0000:0000:0001');"}, {"ip"});
+
+	Register(loader, ScalarFunction("ipv6_expand", {LogicalType::VARCHAR}, LogicalType::VARCHAR, IPv6ExpandFunction),
+	         {"ip"}, "Expands an IPv6 address to eight zero-padded hexadecimal groups.",
+	         {"SELECT ipv6_expand('2001:db8::1');"}, {"ip"});
+
+	Register(loader,
+	         ScalarFunction("is_ipv4_mapped", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsIPv4MappedFunction),
+	         {"ip"}, "Returns true if the address is an IPv4-mapped IPv6 address (::ffff:0:0/96).",
+	         {"SELECT is_ipv4_mapped('::ffff:192.168.1.1');"}, {"ip"});
+
+	Register(loader, ScalarFunction("ip_type", {LogicalType::VARCHAR}, LogicalType::VARCHAR, IPTypeFunction), {"ip"},
+	         "Classifies an IP as public, private, loopback, link_local, multicast, cgnat, documentation, or reserved.",
+	         {"SELECT ip_type('100.64.0.1');"}, {"ip"});
+
+	Register(loader, ScalarFunction("is_bogon", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsBogonFunction), {"ip"},
+	         "Returns true if the IP is not globally routable (any ip_type other than public).",
+	         {"SELECT is_bogon('10.0.0.1');"}, {"ip"});
+
+	Register(loader, ScalarFunction("ip_anonymize", {LogicalType::VARCHAR}, LogicalType::VARCHAR, IPAnonymizeFunction),
+	         {"ip"}, "Truncates an IP for privacy by zeroing all bits after /24 (IPv4) or /48 (IPv6).",
+	         {"SELECT ip_anonymize('192.168.1.123');"}, {"ip"});
+
+	Register(loader,
+	         ScalarFunction("ip_anonymize", {LogicalType::VARCHAR, LogicalType::INTEGER, LogicalType::INTEGER},
+	                        LogicalType::VARCHAR, IPAnonymizeFunction),
+	         {"ip", "ipv4_prefix", "ipv6_prefix"},
+	         "Truncates an IP for privacy by zeroing all bits after the given IPv4 or IPv6 prefix length.",
+	         {"SELECT ip_anonymize('2001:db8:abcd:1234::1', 16, 32);"}, {"ip"});
+
+	Register(loader,
+	         ScalarFunction("extract_fragment", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ExtractFragmentFunction),
+	         {"url"}, "Extracts the fragment (the part after #) from a URL.",
+	         {"SELECT extract_fragment('http://example.com/page#section');"}, {"url"});
+
+	Register(loader, ScalarFunction("domain_depth", {LogicalType::VARCHAR}, LogicalType::INTEGER, DomainDepthFunction),
+	         {"url"}, "Returns the number of dot-separated labels in a host or URL.",
+	         {"SELECT domain_depth('https://www.example.com/page');"}, {"domain"});
+
+	Register(loader,
+	         ScalarFunction("normalize_url", {LogicalType::VARCHAR}, LogicalType::VARCHAR, NormalizeURLFunction),
+	         {"url"},
+	         "Canonicalizes a URL using RFC 3986 normalizations (scheme/host case, default ports, path, query order).",
+	         {"SELECT normalize_url('HTTP://WWW.EXAMPLE.COM:80/a/b/../c/?z=1&a=2#frag');"}, {"url"});
+
+	Register(loader,
+	         ScalarFunction("base64_encode", {LogicalType::VARCHAR}, LogicalType::VARCHAR, Base64EncodeFunction),
+	         {"string"}, "Encodes a string as Base64.", {"SELECT base64_encode('Hello World');"}, {"encoding"});
+
+	Register(loader,
+	         ScalarFunction("base64_decode", {LogicalType::VARCHAR}, LogicalType::VARCHAR, Base64DecodeFunction),
+	         {"encoded"}, "Decodes a Base64 string back to its original form.",
+	         {"SELECT base64_decode('SGVsbG8gV29ybGQ=');"}, {"encoding"});
+
+	Register(loader, ScalarFunction("is_valid_url", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsValidURLFunction),
+	         {"url"}, "Returns true if the input is a well-formed URL with a scheme and host.",
+	         {"SELECT is_valid_url('https://example.com');"}, {"url"});
+
+	Register(loader,
+	         ScalarFunction("is_valid_domain", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsValidDomainFunction),
+	         {"domain"}, "Returns true if the input is a valid domain name per RFC 1035/1123.",
+	         {"SELECT is_valid_domain('example.com');"}, {"domain"});
+
+	Register(loader,
+	         ScalarFunction("is_public_suffix", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsPublicSuffixFunction),
+	         {"domain"},
+	         "Returns true if the domain is exactly a public suffix in the Public Suffix List (e.g. co.uk).",
+	         {"SELECT is_public_suffix('co.uk');"}, {"domain"});
+
+	Register(loader, ScalarFunction("is_known_tld", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, IsKnownTLDFunction),
+	         {"tld"}, "Returns true if the label is a top-level domain listed in the Public Suffix List.",
+	         {"SELECT is_known_tld('com');"}, {"domain"});
+
+	auto extract_path_segments_function =
+	    TableFunction("extract_path_segments", {LogicalType::VARCHAR}, nullptr, netquack::ExtractPathSegmentsFunc::Bind,
+	                  nullptr, netquack::ExtractPathSegmentsFunc::InitLocal);
+	extract_path_segments_function.in_out_function = netquack::ExtractPathSegmentsFunc::Function;
+	Register(loader, std::move(extract_path_segments_function), {"url"},
+	         "Splits a URL path into one row per segment with a 1-based index.",
+	         {"SELECT * FROM extract_path_segments('https://example.com/path/to/page');"}, {"url"});
+
+	auto parse_uri_type = LogicalType::STRUCT({{"scheme", LogicalType(LogicalTypeId::VARCHAR)},
+	                                           {"host", LogicalType(LogicalTypeId::VARCHAR)},
+	                                           {"port", LogicalType(LogicalTypeId::VARCHAR)},
+	                                           {"path", LogicalType(LogicalTypeId::VARCHAR)},
+	                                           {"query", LogicalType(LogicalTypeId::VARCHAR)},
+	                                           {"fragment", LogicalType(LogicalTypeId::VARCHAR)}});
+	Register(loader, ScalarFunction("parse_uri", {LogicalType::VARCHAR}, std::move(parse_uri_type), ParseURIFunction),
+	         {"url"}, "Parses a URI and returns a STRUCT with scheme, host, port, path, query, and fragment.",
+	         {"SELECT parse_uri('https://example.com:8080/path?q=1#section');"}, {"url"});
+
+	Register(loader, ScalarFunction("url_encode", {LogicalType::VARCHAR}, LogicalType::VARCHAR, UrlEncodeFunction),
+	         {"string"}, "Percent-encodes a string per RFC 3986.", {"SELECT url_encode('hello world');"}, {"encoding"});
+
+	Register(loader, ScalarFunction("url_decode", {LogicalType::VARCHAR}, LogicalType::VARCHAR, UrlDecodeFunction),
+	         {"encoded"}, "Decodes a percent-encoded string. Also treats '+' as a space.",
+	         {"SELECT url_decode('hello%20world');"}, {"encoding"});
+
+	Register(loader, ScalarFunction("defang", {LogicalType::VARCHAR}, LogicalType::VARCHAR, DefangFunction), {"url"},
+	         "Defangs a URL, email, or IP in CyberChef style so it is not clickable (hxxps[://]example[.]com).",
+	         {"SELECT defang('https://example.com:443/path');"}, {"url"});
+
+	Register(loader, ScalarFunction("refang", {LogicalType::VARCHAR}, LogicalType::VARCHAR, RefangFunction), {"url"},
+	         "Restores a defanged URL, email, or IP (e.g. hxxps[://]example[.]com) to its original form.",
+	         {"SELECT refang('hxxps[://]example[.]com[:]443/path');"}, {"url"});
+
+	Register(loader, ScalarFunction("url_to_surt", {LogicalType::VARCHAR}, LogicalType::VARCHAR, UrlToSurtFunction),
+	         {"url"}, "Converts a URL to a Sort-friendly URI Reordering Transform (SURT) key as used by web archives.",
+	         {"SELECT url_to_surt('https://www.example.com/Path/?b=2&a=1');"}, {"url"});
+
+	Register(loader, ScalarFunction("surt_to_url", {LogicalType::VARCHAR}, LogicalType::VARCHAR, SurtToUrlFunction),
+	         {"surt"}, "Converts a SURT key back into a URL, assuming http when the SURT carries no scheme.",
+	         {"SELECT surt_to_url('com,example)/path?a=1&b=2');"}, {"url"});
+
+	Register(loader,
+	         ScalarFunction("extract_urls", {LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                        ExtractURLsFunction),
+	         {"text"}, "Extracts every scheme://... URL found in free text, in order of appearance.",
+	         {"SELECT extract_urls('Visit https://example.com/login or ftp://files.example.org now');"}, {"url"});
+
+	Register(loader,
+	         ScalarFunction("extract_domains", {LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                        ExtractDomainsFunction),
+	         {"text"},
+	         "Extracts every lowercased domain name with a known TLD found in free text, in order of appearance.",
+	         {"SELECT extract_domains('Mail from alerts@Example.com about login.bad-site.net');"}, {"domain"});
+
+	Register(loader,
+	         ScalarFunction("extract_ips", {LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                        ExtractIPsFunction),
+	         {"text"}, "Extracts every valid IPv4 and IPv6 address found in free text, in order of appearance.",
+	         {"SELECT extract_ips('Blocked 203.0.113.5:443 and 2001:db8::1 at the edge');"}, {"ip"});
+
+	Register(loader,
+	         TableFunction("netquack_version", {}, netquack::VersionFunc::Scan, netquack::VersionFunc::Bind,
+	                       netquack::VersionFunc::InitGlobal, netquack::VersionFunc::InitLocal),
+	         {}, "Returns the installed netquack extension version.", {"SELECT * FROM netquack_version();"},
+	         {"utility"});
+}
+
+void NetquackExtension::Load(ExtensionLoader &loader) {
+	LoadInternal(loader);
+}
+std::string NetquackExtension::Name() {
+	return "netquack";
+}
+
+std::string NetquackExtension::Version() const {
 #ifdef EXT_VERSION_NETQUACK
-        return EXT_VERSION_NETQUACK;
+	return EXT_VERSION_NETQUACK;
 #else
-        return "";
+	return "";
 #endif
-    }
+}
 } // namespace duckdb
 
-
 extern "C" {
-
-    DUCKDB_CPP_EXTENSION_ENTRY(netquack, loader) {
-        duckdb::LoadInternal(loader);
-    }
+DUCKDB_CPP_EXTENSION_ENTRY(netquack, loader) {
+	duckdb::LoadInternal(loader);
+}
 }

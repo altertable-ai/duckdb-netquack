@@ -1,0 +1,17 @@
+// Copyright 2026 Arash Hatami
+
+#pragma once
+
+#include "../include/duckdb_compat.hpp"
+
+#include "duckdb.hpp"
+
+namespace duckdb {
+void UrlEncodeFunction(DataChunk &args, ExpressionState &state, Vector &result);
+void UrlDecodeFunction(DataChunk &args, ExpressionState &state, Vector &result);
+
+namespace netquack {
+std::string UrlEncode(const std::string_view &input);
+std::string UrlDecode(const std::string_view &input);
+} // namespace netquack
+} // namespace duckdb

@@ -2,16 +2,16 @@
 
 #pragma once
 
+#include "../include/duckdb_compat.hpp"
+
 #include "duckdb.hpp"
 
-namespace duckdb
-{
-    // Function to extract the top-level domain from a URL
-    void ExtractTLDFunction (DataChunk &args, ExpressionState &state, Vector &result);
+namespace duckdb {
+// Function to extract the top-level domain from a URL
+void ExtractTLDFunction(DataChunk &args, ExpressionState &state, Vector &result);
 
-    namespace netquack
-    {
-        // Function to extract the top-level domain from a URL
-        std::string ExtractTLD (ExpressionState &state, const std::string &input);
-    } // namespace netquack
+namespace netquack {
+// Function to extract the top-level domain from a URL
+std::string ExtractTLD(const std::string_view &input);
+} // namespace netquack
 } // namespace duckdb

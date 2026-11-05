@@ -2,102 +2,91 @@
 
 #include "extract_subdomain.hpp"
 
-#include <regex>
+#include "../utils/tld_lookup.hpp"
+#include "../utils/url_helpers.hpp"
 
-#include "../utils/utils.hpp"
+namespace duckdb {
+void ExtractSubDomainFunction(DataChunk &args, ExpressionState &, Vector &result) {
+	const auto &input_vector = args.data[0];
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
-namespace duckdb
-{
-    // Function to extract the sub-domain from a URL
-    void ExtractSubDomainFunction (DataChunk &args, ExpressionState &state, Vector &result)
-    {
-        // Extract the input from the arguments
-        auto &input_vector = args.data[0];
-        auto result_data   = FlatVector::GetData<string_t> (result);
+	for (idx_t i = 0; i < args.size(); i++) {
+		auto value = input_vector.GetValue(i);
+		if (value.IsNull()) {
+			result_validity.SetInvalid(i);
+			continue;
+		}
 
-        for (idx_t i = 0; i < args.size (); i++)
-        {
-            auto input = input_vector.GetValue (i).ToString ();
-            std::transform (input.begin (), input.end (), input.begin (), ::tolower);
+		auto input = value.ToString();
+		std::transform(input.begin(), input.end(), input.begin(), ::tolower);
 
-            try
-            {
-                // Extract the subdomain using the utility function
-                auto subdomain = netquack::ExtractSubDomain (state, input);
-                result_data[i] = StringVector::AddString (result, subdomain);
-            }
-            catch (const std::exception &e)
-            {
-                result_data[i] = "Error extracting subdomain: " + std::string (e.what ());
-            }
-        }
-    }
+		try {
+			auto subdomain = netquack::ExtractSubDomain(input);
+			result_data[i] = StringVector::AddString(result, subdomain);
+		} catch (const std::exception &e) {
+			result_data[i] = StringVector::AddString(result, "Error extracting subdomain: " + std::string(e.what()));
+		}
+	}
+}
 
-    namespace netquack
-    {
-        std::string ExtractSubDomain (ExpressionState &state, const std::string &input)
-        {
-            // Load the public suffix list if not already loaded
-            auto &db = *state.GetContext ().db;
-            netquack::LoadPublicSuffixList (db, false);
-            Connection con (db);
+namespace netquack {
+std::string ExtractSubDomain(const std::string_view &input) {
+	if (input.empty()) {
+		return "";
+	}
 
-            // Extract the host from the URL
-            std::regex host_regex (R"(^(?:(?:https?|ftp|rsync):\/\/)?([^\/\?:]+))");
-            std::smatch host_match;
-            if (!std::regex_search (input, host_match, host_regex))
-            {
-                return "";
-            }
+	const char *data = input.data();
+	size_t size = input.size();
 
-            auto host = host_match[1].str ();
+	std::string_view host = getURLHost(data, size);
 
-            // Split the host into parts
-            std::vector<std::string> parts;
-            std::istringstream stream (host);
-            std::string part;
-            while (std::getline (stream, part, '.'))
-            {
-                parts.push_back (part);
-            }
+	if (host.empty()) {
+		return "";
+	}
 
-            // Find the longest matching public suffix
-            std::string public_suffix;
-            int public_suffix_index = -1;
+	// Remove trailing dot if present
+	if (host[host.size() - 1] == '.') {
+		host.remove_suffix(1);
+	}
 
-            for (size_t j = 0; j < parts.size (); j++)
-            {
-                // Build the candidate suffix
-                std::string candidate;
-                for (size_t k = j; k < parts.size (); k++)
-                {
-                    candidate += (k == j ? "" : ".") + parts[k];
-                }
+	std::string host_str(host);
 
-                // Query the public suffix list
-                auto query        = "SELECT 1 FROM public_suffix_list WHERE suffix = '" + candidate + "'";
-                auto query_result = con.Query (query);
+	// For IPv4 addresses return empty
+	const char *last_dot = find_last_symbols_or_null<'.'>(host.data(), host.data() + host.size());
+	if (last_dot && isNumericASCII(last_dot[1])) {
+		return "";
+	}
 
-                if (query_result->RowCount () > 0)
-                {
-                    public_suffix       = candidate;
-                    public_suffix_index = j;
-                    break;
-                }
-            }
+	// Get the effective TLD
+	std::string tld = getEffectiveTLD(host_str);
+	if (tld.empty()) {
+		{ return ""; } // No TLD found
+	}
 
-            // Determine the subdomain
-            std::string subdomain;
-            if (!public_suffix.empty () && public_suffix_index > 0)
-            {
-                // Combine all parts before the public suffix
-                for (int i = 0; i < public_suffix_index - 1; i++)
-                {
-                    subdomain += (i == 0 ? "" : ".") + parts[i];
-                }
-            }
+	// If the host is just the TLD, no subdomain
+	if (host_str == tld) {
+		{ return ""; }
+	}
 
-            return subdomain;
-        }
-    } // namespace netquack
+	// Find where the TLD starts in the hostname
+	if (host_str.length() > tld.length() && host_str.substr(host_str.length() - tld.length()) == tld) {
+		// Check if there's a dot before the TLD
+		size_t tld_start = host_str.length() - tld.length();
+		if (tld_start > 0 && host_str[tld_start - 1] == '.') {
+			// Find the domain part (one level before TLD)
+			size_t domain_start = host_str.find_last_of('.', tld_start - 2);
+			if (domain_start != std::string::npos) {
+				// There's a subdomain - return everything before domain
+				return host_str.substr(0, domain_start);
+			} else {
+				// No subdomain, just domain.tld
+				{ return ""; }
+			}
+		}
+	}
+
+	{ return ""; }
+}
+} // namespace netquack
 } // namespace duckdb

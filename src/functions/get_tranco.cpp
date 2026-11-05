@@ -3,230 +3,277 @@
 #include "get_tranco.hpp"
 
 #include <curl/curl.h>
-
 #include <fstream>
 #include <regex>
 
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/statement/select_statement.hpp"
+#include "duckdb/parser/tableref/subqueryref.hpp"
 #include "../utils/logger.hpp"
 #include "../utils/utils.hpp"
 
-namespace duckdb
-{
-    namespace netquack
-    {
-        // Function to get the download code for the Tranco list
-        std::string GetTrancoDownloadCode (char *date)
-        {
-            CURL *curl = CreateCurlHandler ();
-            CURLcode res;
-            std::string readBuffer;
+namespace duckdb::netquack {
+// Function to get the download code for the Tranco list
+std::string GetTrancoDownloadCode(const char *date) {
+	CURL *curl = CreateCurlHandler(WriteStringCallback);
+	CURLcode res;
+	std::string readBuffer;
 
-            // Construct the URL for the daily list
-            std::string url = "https://tranco-list.eu/daily_list?date=" + std::string (date) + "&subdomains=true";
+	// Construct the URL for the daily list
+	std::string url = "https://tranco-list.eu/daily_list?date=" + std::string(date) + "&subdomains=true";
 
-            LogMessage (LogLevel::INFO, "Get Tranco download code for date: " + std::string (date));
+	LogMessage(LogLevel::LOG_INFO, "Get Tranco download code for date: " + std::string(date));
 
-            curl_easy_setopt (curl, CURLOPT_URL, url.c_str ());
-            curl_easy_setopt (curl, CURLOPT_WRITEDATA, &readBuffer);
-            res = curl_easy_perform (curl);
-            curl_easy_cleanup (curl);
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+	res = curl_easy_perform(curl);
+	curl_easy_cleanup(curl);
 
-            if (res != CURLE_OK)
-            {
-                LogMessage (LogLevel::ERROR, std::string (curl_easy_strerror (res)));
-                LogMessage (LogLevel::CRITICAL, "Failed to fetch Tranco download code.");
-            }
+	if (res != CURLE_OK) {
+		LogMessage(LogLevel::LOG_ERROR, std::string(curl_easy_strerror(res)));
+		LogMessage(LogLevel::LOG_CRITICAL, "Failed to fetch Tranco download code.");
+	}
 
-            // Extract the download code from the URL
-            std::regex code_regex (R"(Information on the Tranco list with ID ([A-Z0-9]+))");
-            std::smatch code_match;
-            if (std::regex_search (readBuffer, code_match, code_regex) && code_match.size () > 1)
-            {
-                LogMessage (LogLevel::INFO, "Tranco download code: " + code_match[1].str ());
-                return code_match[1].str ();
-            }
+	// Extract the download code from the URL
+	std::regex code_regex(R"(Information on the Tranco list with ID ([A-Z0-9]+))");
+	std::smatch code_match;
+	if (std::regex_search(readBuffer, code_match, code_regex) && code_match.size() > 1) {
+		LogMessage(LogLevel::LOG_INFO, "Tranco download code: " + code_match[1].str());
+		return code_match[1].str();
+	}
 
-            LogMessage (LogLevel::CRITICAL, "Failed to extract Tranco download code.");
-        }
+	LogMessage(LogLevel::LOG_CRITICAL, "Failed to extract Tranco download code.");
+	return "";
+}
 
-        // Function to download the Tranco list and create a table
-        void LoadTrancoList (DatabaseInstance &db, bool force)
-        {
-            // Get yesterday's date in YYYY-MM-DD format
-            std::time_t now    = std::time (nullptr);
-            std::tm *yesterday = std::localtime (&now);
-            yesterday->tm_mday -= 1; // Subtract one day
-            std::mktime (yesterday); // Normalize the time
-            char date[11];
-            std::strftime (date, sizeof (date), "%Y-%m-%d", yesterday);
+// Function to download the Tranco list and create a table
+void LoadTrancoList(DatabaseInstance &db, bool force) {
+	// Get yesterday's date in YYYY-MM-DD format
+	std::time_t now = std::time(nullptr);
+	std::tm yesterday_tm;
+#ifdef _WIN32
+	localtime_s(&yesterday_tm, &now);
+#else
+	localtime_r(&now, &yesterday_tm);
+#endif
 
-            // Construct the file name
-            std::string temp_file = "tranco_list_" + std::string (date) + ".csv";
+	yesterday_tm.tm_mday -= 1;
+	std::mktime(&yesterday_tm);
+	std::string date(11, '\0'); // allocate buffer
 
-            // Download the file if it doesn't exist or if force is true
-            std::ifstream file (temp_file);
-            if (force)
-            {
-                // Remove the old file if it exists
-                if (file.good ())
-                {
-                    remove (temp_file.c_str ());
-                }
-                // Get the download code
-                std::string download_code = GetTrancoDownloadCode (date);
+	std::strftime(date.data(), date.size(), "%Y-%m-%d", &yesterday_tm);
 
-                // Construct the download URL
-                std::string download_url = "https://tranco-list.eu/download/" + download_code + "/full";
+	// Remove trailing null character(s)
+	date.resize(std::strlen(date.c_str()));
 
-                LogMessage (LogLevel::INFO, "Download Tranco list: " + download_url);
+	// Construct filename
+	std::string temp_file = "tranco_list_" + date + ".csv";
 
-                // Download the CSV file to a temporary file
-                CURL *curl = CreateCurlHandler ();
-                CURLcode res;
-                FILE *file = fopen (temp_file.c_str (), "wb");
-                if (!file)
-                {
-                    curl_easy_cleanup (curl);
-                    LogMessage (LogLevel::CRITICAL, "Failed to create temporary file for Tranco list.");
-                }
+	// Check if file exists before download
+	bool file_exists = false;
+	{
+		std::ifstream check_file(temp_file);
+		file_exists = check_file.good();
+	}
 
-                curl_easy_setopt (curl, CURLOPT_URL, download_url.c_str ());
-                curl_easy_setopt (curl, CURLOPT_WRITEDATA, file);
-                res = curl_easy_perform (curl);
-                curl_easy_cleanup (curl);
-                fclose (file);
+	// Download the file if it doesn't exist or if force is true
+	if (force) {
+		// Remove the old file if it exists
+		if (file_exists) {
+			remove(temp_file.c_str());
+		}
+		// Get the download code
+		std::string download_code = GetTrancoDownloadCode(date.c_str());
 
-                if (res != CURLE_OK)
-                {
-                    remove (temp_file.c_str ()); // Clean up the temporary file
-                    LogMessage (LogLevel::ERROR, std::string (curl_easy_strerror (res)));
-                    LogMessage (LogLevel::CRITICAL, "Failed to download Tranco list. Check logs for details.");
-                }
-            }
+		// Construct the download URL
+		std::string download_url = "https://tranco-list.eu/download/" + download_code + "/full";
 
-            if (!file.good ())
-            {
-                LogMessage (LogLevel::CRITICAL, "Tranco list `" + temp_file + "` not found. Download it first using `SELECT update_tranco(true);`");
-            }
+		LogMessage(LogLevel::LOG_INFO, "Download Tranco list: " + download_url);
 
-            // Parse the CSV data and insert into a table
-            LogMessage (LogLevel::INFO, "Inserting Tranco list into table");
+		// Download the CSV file to a temporary file
+		CURL *curl = CreateCurlHandler(WriteFileCallback);
+		CURLcode res;
+		FILE *download_file = fopen(temp_file.c_str(), "wb");
+		if (!download_file) {
+			curl_easy_cleanup(curl);
+			LogMessage(LogLevel::LOG_CRITICAL, "Failed to create temporary file for Tranco list.");
+		}
 
-            Connection con (db);
-            string query = "CREATE OR REPLACE TABLE tranco_list AS"
-                           " SELECT rank,"
-                           " domain,"
-                           " CASE"
-                           " WHEN rank <= 1000 THEN 'top1k'"
-                           " WHEN rank <= 5000 THEN 'top5k'"
-                           " WHEN rank <= 10000 THEN 'top10k'"
-                           " WHEN rank <= 50000 THEN 'top50k'"
-                           " WHEN rank <= 100000 THEN 'top100k'"
-                           " WHEN rank <= 500000 THEN 'top500k'"
-                           " WHEN rank <= 1000000 THEN 'top1m'"
-                           " WHEN rank <= 5000000 THEN 'top5m'"
-                           " ELSE 'other'"
-                           " END AS category"
-                           " FROM read_csv('" +
-                temp_file + "', header = false, columns = { 'rank': 'INTEGER', 'domain': 'VARCHAR' })";
-            auto result = con.Query (query);
+		curl_easy_setopt(curl, CURLOPT_URL, download_url.c_str());
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, download_file);
+		res = curl_easy_perform(curl);
+		curl_easy_cleanup(curl);
+		fclose(download_file);
 
-            if (result->HasError ())
-            {
-                LogMessage (LogLevel::CRITICAL, result->GetError ());
-            }
-        }
+		if (res != CURLE_OK) {
+			remove(temp_file.c_str()); // Clean up the temporary file
+			LogMessage(LogLevel::LOG_ERROR, std::string(curl_easy_strerror(res)));
+			LogMessage(LogLevel::LOG_CRITICAL, "Failed to download Tranco list. Check logs for details.");
+		}
 
-        // Function to update the Tranco list table
-        void UpdateTrancoListFunction (DataChunk &args, ExpressionState &state, Vector &result)
-        {
-            // Extract the force_download argument
-            auto &force_download_vector = args.data[0];
-            bool force_download         = force_download_vector.GetValue (0).GetValue<bool> ();
+		file_exists = true;
+	}
 
-            // Load the Tranco list into the database
-            auto &db = *state.GetContext ().db;
-            netquack::LoadTrancoList (db, force_download);
+	if (!file_exists) {
+		LogMessage(LogLevel::LOG_CRITICAL,
+		           "Tranco list `" + temp_file + "` not found. Download it first using `SELECT update_tranco(true);`");
+	}
 
-            result.SetValue (0, Value ("Tranco list updated"));
-        }
+	// Parse the CSV data and insert into a table
+	LogMessage(LogLevel::LOG_INFO, "Inserting Tranco list into table");
 
-        // Function to get the Tranco rank of a domain
-        void GetTrancoRankFunction (DataChunk &args, ExpressionState &state, Vector &result)
-        {
-            auto &db = *state.GetContext ().db;
-            netquack::LoadPublicSuffixList (db, false);
-            Connection con (db);
+	Connection con(db);
+	string query = "CREATE OR REPLACE TABLE tranco_list AS"
+	               " SELECT rank,"
+	               " domain,"
+	               " CASE"
+	               " WHEN rank <= 1000 THEN 'top1k'"
+	               " WHEN rank <= 5000 THEN 'top5k'"
+	               " WHEN rank <= 10000 THEN 'top10k'"
+	               " WHEN rank <= 50000 THEN 'top50k'"
+	               " WHEN rank <= 100000 THEN 'top100k'"
+	               " WHEN rank <= 500000 THEN 'top500k'"
+	               " WHEN rank <= 1000000 THEN 'top1m'"
+	               " WHEN rank <= 5000000 THEN 'top5m'"
+	               " ELSE 'other'"
+	               " END AS category"
+	               " FROM read_csv('" +
+	               temp_file + "', header = false, columns = { 'rank': 'INTEGER', 'domain': 'VARCHAR' })";
+	auto result = con.Query(query);
 
-            auto table_exists = con.Query ("SELECT 1 FROM information_schema.tables WHERE table_name = 'tranco_list'");
+	if (result->HasError()) {
+		LogMessage(LogLevel::LOG_CRITICAL, result->GetError());
+	}
+}
 
-            if (table_exists->RowCount () == 0)
-            {
-                LogMessage (LogLevel::CRITICAL, "Tranco table not found. Download it first using `SELECT update_tranco(true);`");
-            }
+// Function to update the Tranco list table
+void UpdateTrancoListFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Extract the force_download argument
+	auto &force_download_vector = args.data[0];
+	bool force_download = force_download_vector.GetValue(0).GetValue<bool>();
 
-            // Extract the input from the arguments
-            auto &input_vector = args.data[0];
-            auto result_data   = FlatVector::GetData<string_t> (result);
+	// Load the Tranco list into the database
+	auto &db = *state.GetContext().db;
+	netquack::LoadTrancoList(db, force_download);
 
-            for (idx_t i = 0; i < args.size (); i++)
-            {
-                auto input = input_vector.GetValue (i).ToString ();
-                std::transform (input.begin (), input.end (), input.begin (), ::tolower);
+	result.SetValue(0, Value("Tranco list updated"));
+}
 
-                try
-                {
-                    auto query = "SELECT rank FROM tranco_list WHERE domain = '" + input + "'";
+// Function to get the Tranco rank of a domain
+void GetTrancoRankFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &db = *state.GetContext().db;
+	Connection con(db);
 
-                    auto query_result = con.Query (query);
-                    auto rank         = query_result->RowCount () > 0 ? query_result->GetValue (0, 0) : Value ();
+	auto table_exists = con.Query("SELECT 1 FROM information_schema.tables WHERE table_name = 'tranco_list'");
+	auto check_chunk = table_exists->Fetch();
 
-                    result_data[i] = StringVector::AddString (result, rank.ToString ());
-                }
-                catch (const std::exception &e)
-                {
-                    result_data[i] = "Error extracting tranco rank: " + std::string (e.what ());
-                }
-            }
-        }
+	if (!check_chunk || check_chunk->size() == 0) {
+		LogMessage(LogLevel::LOG_CRITICAL,
+		           "Tranco table not found. Download it first using `SELECT update_tranco(true);`");
+	}
 
-        // Function to get the Tranco rank category of a domain
-        void GetTrancoRankCategoryFunction (DataChunk &args, ExpressionState &state, Vector &result)
-        {
-            auto &db = *state.GetContext ().db;
-            netquack::LoadPublicSuffixList (db, false);
-            Connection con (db);
+	// Extract the input from the arguments
+	const auto &input_vector = args.data[0];
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
 
-            auto table_exists = con.Query ("SELECT 1 FROM information_schema.tables WHERE table_name = 'tranco_list'");
+	for (idx_t i = 0; i < args.size(); i++) {
+		auto value = input_vector.GetValue(i);
+		if (value.IsNull()) {
+			result_validity.SetInvalid(i);
+			continue;
+		}
 
-            if (table_exists->RowCount () == 0)
-            {
-                LogMessage (LogLevel::CRITICAL, "Tranco table not found. Download it first using `SELECT update_tranco(true);`");
-            }
+		auto input = value.ToString();
+		std::transform(input.begin(), input.end(), input.begin(), ::tolower);
 
-            // Extract the input from the arguments
-            auto &input_vector = args.data[0];
-            auto result_data   = FlatVector::GetData<string_t> (result);
+		try {
+			auto prepared = con.Prepare("SELECT rank FROM tranco_list WHERE domain = $1");
+			auto query_result = prepared->Execute(input);
 
-            for (idx_t i = 0; i < args.size (); i++)
-            {
-                auto input = input_vector.GetValue (i).ToString ();
-                std::transform (input.begin (), input.end (), input.begin (), ::tolower);
+			if (query_result->HasError()) {
+				result_validity.SetInvalid(i);
+				continue;
+			}
 
-                try
-                {
-                    auto query = "SELECT category FROM tranco_list WHERE domain = '" + input + "'";
+			auto chunk = query_result->Fetch();
+			if (chunk && chunk->size() > 0) {
+				auto rank = chunk->GetValue(0, 0);
+				result_data[i] = StringVector::AddString(result, rank.ToString());
+			} else {
+				// Domain not found - return NULL
+				result_validity.SetInvalid(i);
+			}
+		} catch (const std::exception &e) {
+			result_data[i] = StringVector::AddString(result, "Error extracting tranco rank: " + std::string(e.what()));
+		}
+	}
+}
 
-                    auto query_result = con.Query (query);
-                    auto category     = query_result->RowCount () > 0 ? query_result->GetValue (0, 0) : Value ();
+// Function to get the Tranco rank category of a domain
+void GetTrancoRankCategoryFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &db = *state.GetContext().db;
+	Connection con(db);
 
-                    result_data[i] = StringVector::AddString (result, category.ToString ());
-                }
-                catch (const std::exception &e)
-                {
-                    result_data[i] = "Error extracting tranco category: " + std::string (e.what ());
-                }
-            }
-        }
-    } // namespace netquack
-} // namespace duckdb
+	auto table_exists = con.Query("SELECT 1 FROM information_schema.tables WHERE table_name = 'tranco_list'");
+	auto chunk = table_exists->Fetch();
+
+	if (!chunk || chunk->size() == 0) {
+		LogMessage(LogLevel::LOG_CRITICAL,
+		           "Tranco table not found. Download it first using `SELECT update_tranco(true);`");
+	}
+
+	// Extract the input from the arguments
+	const auto &input_vector = args.data[0];
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto &result_validity = FlatVector::ValidityMutable(result);
+
+	for (idx_t i = 0; i < args.size(); i++) {
+		auto value = input_vector.GetValue(i);
+		if (value.IsNull()) {
+			result_validity.SetInvalid(i);
+			continue;
+		}
+
+		auto input = value.ToString();
+		std::transform(input.begin(), input.end(), input.begin(), ::tolower);
+
+		try {
+			auto prepared = con.Prepare("SELECT category FROM tranco_list WHERE domain = $1");
+			auto query_result = prepared->Execute(input);
+
+			if (query_result->HasError()) {
+				result_validity.SetInvalid(i);
+				continue;
+			}
+
+			auto result_chunk = query_result->Fetch();
+			if (result_chunk && result_chunk->size() > 0) {
+				auto category = result_chunk->GetValue(0, 0);
+				result_data[i] = StringVector::AddString(result, category.ToString());
+			} else {
+				// Domain not found - return NULL
+				result_validity.SetInvalid(i);
+			}
+		} catch (const std::exception &e) {
+			result_data[i] =
+			    StringVector::AddString(result, "Error extracting tranco category: " + std::string(e.what()));
+		}
+	}
+}
+
+unique_ptr<TableRef> TrancoListFunc::BindReplace(ClientContext &context, TableFunctionBindInput &input) {
+	const string table_name = "tranco_list";
+	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_name)));
+	auto table = Catalog::GetEntry(context, lookup_info, OnEntryNotFound::RETURN_NULL);
+	if (!table) {
+		throw InvalidInputException("Tranco table not found. Download it first using `SELECT update_tranco(true);`");
+	}
+
+	Parser parser(context);
+	parser.ParseQuery("SELECT rank, domain, category FROM tranco_list");
+	auto select = unique_ptr_cast<SQLStatement, SelectStatement>(std::move(parser.statements[0]));
+	return make_uniq<SubqueryRef>(std::move(select));
+}
+} // namespace duckdb::netquack

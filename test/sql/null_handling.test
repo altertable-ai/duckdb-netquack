@@ -1,0 +1,259 @@
+# name: test/sql/null_handling.test
+# description: test netquack extension NULL handling for all functions
+# group: [sql]
+
+require netquack
+
+# Test NULL handling for extract_domain
+query I
+SELECT extract_domain(NULL);
+----
+NULL
+
+# Test NULL handling for extract_tld
+query I
+SELECT extract_tld(NULL);
+----
+NULL
+
+# Test NULL handling for extract_subdomain
+query I
+SELECT extract_subdomain(NULL);
+----
+NULL
+
+# Test NULL handling for extract_sld
+query I
+SELECT extract_sld(NULL);
+----
+NULL
+
+# Test NULL handling for extract_urls, extract_domains, extract_ips
+query III
+SELECT extract_urls(NULL), extract_domains(NULL), extract_ips(NULL);
+----
+NULL	NULL	NULL
+
+# Test NULL handling for extract_host
+query I
+SELECT extract_host(NULL);
+----
+NULL
+
+# Test NULL handling for extract_path
+query I
+SELECT extract_path(NULL);
+----
+NULL
+
+# Test NULL handling for extract_schema
+query I
+SELECT extract_schema(NULL);
+----
+NULL
+
+# Test NULL handling for extract_port
+query I
+SELECT extract_port(NULL);
+----
+NULL
+
+# Test NULL handling for extract_query_string
+query I
+SELECT extract_query_string(NULL);
+----
+NULL
+
+# Test NULL handling for extract_extension
+query I
+SELECT extract_extension(NULL);
+----
+NULL
+
+# Test NULL handling for extract_fragment
+query I
+SELECT extract_fragment(NULL);
+----
+NULL
+
+# Test NULL handling for domain_depth
+query I
+SELECT domain_depth(NULL);
+----
+NULL
+
+# Test NULL handling for base64_encode
+query I
+SELECT base64_encode(NULL);
+----
+NULL
+
+# Test NULL handling for base64_decode
+query I
+SELECT base64_decode(NULL);
+----
+NULL
+
+# Test NULL handling for is_valid_url
+query I
+SELECT is_valid_url(NULL);
+----
+NULL
+
+# Test NULL handling for is_valid_domain
+query I
+SELECT is_valid_domain(NULL);
+----
+NULL
+
+# Test NULL handling for is_public_suffix
+query I
+SELECT is_public_suffix(NULL);
+----
+NULL
+
+# Test NULL handling for is_known_tld
+query I
+SELECT is_known_tld(NULL);
+----
+NULL
+
+# Test NULL handling for url_encode
+query I
+SELECT url_encode(NULL);
+----
+NULL
+
+# Test NULL handling for url_decode
+query I
+SELECT url_decode(NULL);
+----
+NULL
+
+# Test NULL handling for defang
+query I
+SELECT defang(NULL);
+----
+NULL
+
+# Test NULL handling for refang
+query I
+SELECT refang(NULL);
+----
+NULL
+
+# Test NULL handling for url_to_surt
+query I
+SELECT url_to_surt(NULL);
+----
+NULL
+
+# Test NULL handling for surt_to_url
+query I
+SELECT surt_to_url(NULL);
+----
+NULL
+
+# Test NULL handling for parse_uri
+query I
+SELECT parse_uri(NULL);
+----
+NULL
+
+# Test NULL handling for ip_in_range
+query I
+SELECT ip_in_range(NULL, NULL);
+----
+NULL
+
+# Test NULL handling for ip_to_ptr
+query I
+SELECT ip_to_ptr(NULL);
+----
+NULL
+
+# Test NULL handling for ipv6_compress
+query I
+SELECT ipv6_compress(NULL);
+----
+NULL
+
+# Test NULL handling for ipv6_expand
+query I
+SELECT ipv6_expand(NULL);
+----
+NULL
+
+# Test NULL handling for is_ipv4_mapped
+query I
+SELECT is_ipv4_mapped(NULL);
+----
+NULL
+
+# Test NULL handling for ip_type
+query I
+SELECT ip_type(NULL);
+----
+NULL
+
+# Test NULL handling for is_bogon
+query I
+SELECT is_bogon(NULL);
+----
+NULL
+
+# Test NULL handling for ip_anonymize
+query I
+SELECT ip_anonymize(NULL);
+----
+NULL
+
+# Test NULL values in a table
+statement ok
+CREATE TABLE test_nulls (url VARCHAR);
+
+statement ok
+INSERT INTO test_nulls VALUES (NULL), ('https://example.com'), (NULL), ('http://test.org/path');
+
+query I
+SELECT extract_domain(url) FROM test_nulls;
+----
+NULL
+example.com
+NULL
+test.org
+
+query I
+SELECT extract_tld(url) FROM test_nulls;
+----
+NULL
+com
+NULL
+org
+
+query I
+SELECT extract_host(url) FROM test_nulls;
+----
+NULL
+example.com
+NULL
+test.org
+
+query I
+SELECT extract_path(url) FROM test_nulls;
+----
+NULL
+/
+NULL
+/path
+
+query I
+SELECT extract_schema(url) FROM test_nulls;
+----
+NULL
+https
+NULL
+http
+
+statement ok
+DROP TABLE test_nulls;

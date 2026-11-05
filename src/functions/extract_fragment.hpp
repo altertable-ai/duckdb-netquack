@@ -1,0 +1,17 @@
+// Copyright 2026 Arash Hatami
+
+#pragma once
+
+#include "../include/duckdb_compat.hpp"
+
+#include "duckdb.hpp"
+
+namespace duckdb {
+// Function to extract the fragment from a URL
+void ExtractFragmentFunction(DataChunk &args, ExpressionState &state, Vector &result);
+
+namespace netquack {
+// Function to extract the fragment from a URL
+std::string ExtractFragment(const std::string_view &input);
+} // namespace netquack
+} // namespace duckdb

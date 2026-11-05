@@ -29,13 +29,19 @@ The compatibility between Netquack and DuckDB varies across versions.
 
 | Version of Netquack | Version of DuckDB |
 | ------------------- | ----------------- |
-| v1.0.0              | v1.2.0            |
+| v1.16.0             | v2.0.0            |
+| v1.15.1             | v1.5.6            |
+| v1.15.0             | v1.5.5            |
+| v1.14.0             | v1.5.5            |
+| v1.13.0             | v1.5.5            |
+| v1.12.1             | v1.5.3            |
 
 ### Install Netquack
 
-BlockDuck is one of the available DuckDB community [extensions](https://duckdb.org/community_extensions/list_of_extensions), so we can use `INSTALL`and `LOAD` to install it easily.
+Netquack is one of the available DuckDB community [extensions](https://duckdb.org/community_extensions/list_of_extensions), so we can use `INSTALL` and `LOAD` to install it easily.
 
 ```sql
+SET allow_community_extensions = true;
 INSTALL netquack FROM community;
 LOAD netquack;
 ```
@@ -45,4 +51,18 @@ If you previously installed the extension, upgrade using the FORCE command
 ```sql
 FORCE INSTALL netquack FROM community;
 LOAD netquack;
+```
+
+Also, you can check for any available updates for the extension using this command:
+
+```sql
+UPDATE EXTENSIONS (netquack);
+```
+
+You can list installed netquack functions and their catalog metadata with:
+
+```sql
+SELECT function_name, parameters, description, categories
+FROM duckdb_functions()
+WHERE function_name IN ('extract_domain', 'ipcalc', 'netquack_version');
 ```
